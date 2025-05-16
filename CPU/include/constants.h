@@ -17,3 +17,6 @@ const real STENCIL_WEIGHTS[STENCIL_ORDER][STENCIL_ORDER] =
     { 0.5, 0.0, 0.5 },
     {0.25, 0.5, 0.25}
 };
+
+#define PADDING_OFFSET_X    1
+#define PADDING_OFFSET_Y    1

@@ -15,7 +15,7 @@ typedef struct SDL_config_s
     SDL_Texture     *texture;
 } SDL_config_t;
 
-extern SDL_config_t render_init(args_t *args, u32 dim_x, u32 dim_y);
+extern SDL_config_t render_init(args_t *args);
 extern void render_cleanup(SDL_config_t *config);
 
 extern void render_gray_scott(SDL_config_t config, chemicals_t chemicals);

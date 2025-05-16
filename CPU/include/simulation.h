@@ -4,7 +4,7 @@
 
 #include "types.h"
 
-#define make_2d_span(type, attr, ptr, dim2) (type (*)[dim2]) (ptr)
+#define make_2D_span(type, attr, ptr, dim2) (type (*attr)[dim2]) (ptr)
 
 typedef struct chemicals_s
 {
@@ -22,5 +22,7 @@ extern void free_chemicals(chemicals_t chemical);
 extern void simulation_step(const chemicals_t in, chemicals_t out);
 extern void swap_chemicals(chemicals_t *ptr_1, chemicals_t *ptr_2);
 
-extern void write_data(FILE *fp, chemicals_t *chemical);
+extern void write_data(FILE *fp, chemicals_t const *chemical);
 extern chemicals_t read_data(FILE *fp);
+
+extern chemicals_t to_scalar_layout(chemicals_t const *in);

@@ -1,8 +1,7 @@
 #include "cli_handler.h"
+#include "logs.h"
 
 #include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <ctype.h>
 
 typedef struct arguments_s
@@ -12,10 +11,11 @@ typedef struct arguments_s
     u8 value;
 } arguments_t;
 
-
 static const int nb_opts        = 6;
 static const int max_args_count = 17;
 static const int max_digits     = 15;
+
+// Opt in for output and opt in for benchmark mode
 static const arguments_t arguments[6] = 
 {
     {'r', "-num_rows"        , 1},
@@ -76,9 +76,7 @@ void parse_arguments(int argc, char *argv[argc+1], args_t *args)
 
         if(curr_arg[0] != '-')
         {
-            fprintf(stderr, "Invalid argument %s, use --help to see the available commands\n"
-                    , argv[i]);
-            exit(1);
+            gs_error_print("Invalid argument %s, use --help to see available commands", argv[i]);
         }
        
         curr_arg += 1;
@@ -155,14 +153,11 @@ void parse_arguments(int argc, char *argv[argc+1], args_t *args)
     return;
 
     invalid_argument :
-        fprintf(stderr, "Invalid argument provided to the %s flag\n", curr_arg);
-        exit(1);
+        gs_error_print("Invalid argument provided to the %s flag", curr_arg);
 
     unknown_flag :
-        fprintf(stderr, "Unkown flag %s while parsing\n", curr_arg);
-        exit(1);
+        gs_error_print("Unknown flag %s while parsing", curr_arg);
 
     missing_argument :
-        fprintf(stderr, "Missing argument to flag %s while parsing\n", curr_arg);
-        exit(1);
+        gs_error_print("Missing argument to flag %s while parsing", curr_arg);
 }

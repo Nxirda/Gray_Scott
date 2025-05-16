@@ -2,10 +2,13 @@ CC=gcc
 
 TARGET=gray_scott
 
-WFlags= -Werror -Wall -Wextra -Wconversion -g -Iinclude/
+CFlags=
+DebugFlags=-g3 -fno-omit-frame-pointer
+WFlags= -Werror -Wall -Wextra -Wconversion $(DebugFlags) -Iinclude/ 
 OFlags= -O3 -march=native
 
 SDL2=`sdl2-config --cflags --libs`
+LFlags= $(SDL2) #-fopenmp 
 
 SRC_DIR=src
 INC_DIR=include
@@ -20,11 +23,11 @@ BIN= $(BUILD_DIR)/$(TARGET)
 all: $(BIN)
 
 $(BIN): $(OBJECTS)
-	$(CC) $(WFlags) $(OFlags) $(OBJECTS) main.c -o $@ $(SDL2)
+	$(CC) $(CFlags) $(WFlags) $(OFlags) $(OBJECTS) main.c -o $@ $(LFlags)
 
 # Pipe is used to ensure build dir is created before anything
 $(BUILD_DIR)/%.o : $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(WFlags) $(OFlags) -c $< -o $@ $(SDL2)
+	$(CC) $(CFlags) $(WFlags) $(OFlags) -c $< -o $@ $(LFlags)
 
 $(BUILD_DIR) : 
 	mkdir -p $(BUILD_DIR)
