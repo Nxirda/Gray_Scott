@@ -8,8 +8,8 @@
 #define KILLRATE            REAL_TYPE(0.054)
 #define DELTA_T             REAL_TYPE(1.0)
 
-#define STENCIL_ORDER       3
-#define STENCIL_OFFSET      1
+#define STENCIL_ORDER       3ULL
+#define STENCIL_OFFSET      1ULL
 
 const real STENCIL_WEIGHTS[STENCIL_ORDER][STENCIL_ORDER] = 
 {
@@ -18,5 +18,5 @@ const real STENCIL_WEIGHTS[STENCIL_ORDER][STENCIL_ORDER] =
     {0.25, 0.5, 0.25}
 };
 
-#define PADDING_OFFSET_X    1
-#define PADDING_OFFSET_Y    1
+#define PADDING_OFFSET_X    1ULL
+#define PADDING_OFFSET_Y    1ULL

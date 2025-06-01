@@ -1,6 +1,7 @@
 #include "renderer.h"
 #include "colormap.h"
 #include "logs.h"
+#include <assert.h>
 
 #define MIN_SIZE_X  640
 #define MIN_SIZE_Y  360
@@ -74,13 +75,15 @@ void render_cleanup(SDL_config_t *config)
 }
 
 // There is some padding to handle there
-void render_gray_scott(SDL_config_t config, chemicals_t chemical)
+void render_gray_scott(SDL_config_t config, chemicals_t const* chemical)
 {
-    const real(* restrict v_map)[chemical.y_size] = 
-        make_2D_span(real, restrict, chemical.v, chemical.y_size);
+    const real(* restrict v_map)[chemical->y_size] = 
+        make_2D_span(real, restrict, chemical->v, chemical->y_size);
     
     u64 nb_bytes    = (config.dim_x * config.dim_y) * sizeof(u32);
     u32 *pixels     = (u32*)malloc(nb_bytes);
+
+    assert(config.dim_x == chemical->x_size && config.dim_y == chemical->y_size);
     if(!pixels)
     {
         gs_error_print("Couldnt allocate %lld bytes from memory for the rendering"

@@ -18,4 +18,4 @@ typedef struct SDL_config_s
 extern SDL_config_t render_init(args_t *args);
 extern void render_cleanup(SDL_config_t *config);
 
-extern void render_gray_scott(SDL_config_t config, chemicals_t chemicals);
+extern void render_gray_scott(SDL_config_t config, chemicals_t const* chemicals);

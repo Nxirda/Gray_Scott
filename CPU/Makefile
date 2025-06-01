@@ -2,19 +2,31 @@ CC=gcc
 
 TARGET=gray_scott
 
-CFlags=
-DebugFlags=-g3 -fno-omit-frame-pointer
-WFlags= -Werror -Wall -Wextra -Wconversion $(DebugFlags) -Iinclude/ 
-OFlags= -O3 -march=native
+CFlags=-std=c2x
+
+ifdef DEBUG
+   CFlags+=-g3 -fno-omit-frame-pointer
+else ifdef BENCHMARK
+	CFlags+=-g3 -fno-omit-frame-pointer -DNDEBUG
+else
+   CFlags+=-DNDEBUG
+endif
+
+ifdef DOUBLE
+   CFlags+=-DDOUBLE_PRECISION
+endif
+
+WFlags= -Werror -Wall -Wextra -Wconversion -Wpedantic -Iinclude/ 
+OFlags= -Ofast -march=native -funroll-loops -flto 
 
 SDL2=`sdl2-config --cflags --libs`
-LFlags= $(SDL2) #-fopenmp 
+LFlags= $(SDL2) -fopenmp 
 
 SRC_DIR=src
 INC_DIR=include
 BUILD_DIR=build
 
-# wildcard ensures that the command id expanded by the shell
+# wildcard ensures that the command is expanded by the shell
 SOURCES= $(wildcard $(SRC_DIR)/*.c) 
 OBJECTS= $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(SOURCES)))
 

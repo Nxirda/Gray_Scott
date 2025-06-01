@@ -21,6 +21,26 @@ void tmp_print(chemicals_t *chem)
     }
 }
 
+void tmp_print_simd(chemicals_t *chem)
+{
+    real (*u)[chem->y_size][4] = make_3D_span(real, , chem->u, chem->y_size, 4);
+
+    for(u64 i = 0; i < chem->x_size; i++)
+    {
+        for(u64 j = 0; j < chem->y_size; j++)
+        {
+            printf("[");
+            for(u64 k = 0; k < 4; k++)
+            {
+                //printf("|%lld%lld", i, j);
+                printf("%3.2f ", u[i][j][k]);
+            }
+            printf("] ");
+        }
+        printf("|\n");
+    }
+}
+
 int main(int argc, char **argv)
 {
     args_t args;
@@ -40,9 +60,10 @@ int main(int argc, char **argv)
         uv_in   = new_chemicals(args.num_rows, args.num_cols);
         uv_out  = zeros_chemicals(args.num_rows, args.num_cols);
        
-        //tmp_print(&uv_in);
-        //chemicals_t tmp = to_scalar_layout(&uv_in);
-        //tmp_print(&tmp);
+        /*tmp_print_simd(&uv_in);
+        printf("\n");
+        chemicals_t tmp = to_scalar_layout(&uv_in);
+        tmp_print(&tmp);*/
         
         gs_debug_print("Num rows : %lld; num cols : %lld", args.num_rows, args.num_cols);
         gs_debug_print("X size : %lld; Y size : %lld", uv_in.x_size, uv_in.y_size);
@@ -50,15 +71,17 @@ int main(int argc, char **argv)
         //tmp_print(&uv_in);
         for(u64 i = 0; i < args.steps; i++)
         {
-            simulation_step(uv_in, uv_out);
+            simulation_step(&uv_in, &uv_out);
             swap_chemicals(&uv_in, &uv_out);
 
-            if(i % args.output_frequency == 0)
-                write_data(fp, &uv_in);
+            //if(i % args.output_frequency == 0)
+            //    write_data(fp, &uv_in);
         }
-
+        
+        
         //tmp_print(&uv_in);
         //chemicals_t tmp = to_scalar_layout(&uv_in);
+        //write_data(fp, &tmp);
         //tmp_print(&tmp);
 
         fclose(fp);
@@ -70,23 +93,27 @@ int main(int argc, char **argv)
         uv_in   = new_chemicals(args.num_rows, args.num_cols);
         uv_out  = zeros_chemicals(args.num_rows, args.num_cols);
         
+        chemicals_t tmp; 
+        
         for(u64 i = 0; i < args.steps; i++)
         {
-            simulation_step(uv_in, uv_out);
+            simulation_step(&uv_in, &uv_out);
             swap_chemicals(&uv_in, &uv_out);
 
             if(i % args.output_frequency == 0)
             {
-                chemicals_t tmp = to_scalar_layout(&uv_in);
-                render_gray_scott(sdl_conf, tmp);
+                tmp = to_scalar_layout(&uv_in);
+                render_gray_scott(sdl_conf, &tmp);
             }
 
         }
+
+        free_chemicals(&tmp);
         render_cleanup(&sdl_conf);
     }
 
-    free_chemicals(uv_in);
-    free_chemicals(uv_out);
+    free_chemicals(&uv_in);
+    free_chemicals(&uv_out);
 
     return 0;
 }

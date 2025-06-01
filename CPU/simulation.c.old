@@ -1,0 +1,594 @@
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <stdalign.h>
+//#include <omp.h>
+
+#include "constants.h"
+#include "simulation.h"
+#include "logs.h"
+
+// Error handling via asserts to be added
+
+#ifdef SIMD_LAYOUT
+
+//#define SIMD_LEN        4
+#define SIMD_LEN        (256/sizeof(real))
+// In fact that s just the base padding
+#define SIMD_OFFSET_X   1
+#define SIMD_OFFSET_Y   1 //SIMD_LEN
+
+static const u64 ALIGNMENT = 64; //(sizeof(real) * 8); //SIMD_LEN
+
+static inline void update_top_bottom(chemicals_t *uv)
+{ 
+    real (*restrict u_span)[uv->y_size] 
+        = make_2D_span(real, restrict, uv->u, uv->y_size);
+
+    real (*restrict v_span)[uv->y_size] 
+        = make_2D_span(real, restrict, uv->v, uv->y_size);
+    
+    for(u64 j = SIMD_LEN; j < uv->y_size - SIMD_LEN; j+=SIMD_LEN)
+    {
+        for(u64 k = 0; k < SIMD_LEN-1; k++)
+        {
+            u_span[0][j+k+1] = u_span[uv->x_size - 2][j + k];
+            u_span[uv->x_size -1][j + k] = u_span[1][j + k + 1];
+        }
+    }
+
+    for(u64 j = SIMD_LEN; j < uv->y_size - SIMD_LEN; j+=SIMD_LEN)
+    {
+        for(u64 k = 0; k < SIMD_LEN-1; k++)
+        {
+            v_span[0][j+k+1] = v_span[uv->x_size - 2][j + k];
+            v_span[uv->x_size -1][j + k] = v_span[1][j + k + 1];
+        }
+    }
+}
+
+chemicals_t new_chemicals(u64 x, u64 y) 
+{
+    assert(x % SIMD_LEN == 0);
+    assert(y % SIMD_LEN == 0);
+ 
+    chemicals_t uv;
+    uv.nb_members = 2;
+ 
+    u64 num_center_rows = x / SIMD_LEN;  
+    u64 simd_x_size     = num_center_rows + 2;
+    u64 simd_y_size     = (y + 2) * SIMD_LEN;
+
+    uv.x_size = simd_x_size;
+    uv.y_size = simd_y_size; 
+
+    u64 size = (uv.x_size * uv.y_size);
+    u64 bytes_size = uv.nb_members * (size * sizeof(real));
+    
+    assert(bytes_size % ALIGNMENT == 0);
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size);
+    if(!data)
+    {
+        gs_error_print("Could not allocate %lld bytes for the mesh", bytes_size);
+    }
+    memset(data, 0, bytes_size);
+
+    //Legal with restrict as per 
+    // https://en.cppreference.com/w/c/language/restrict
+    uv.u = (data);
+    uv.v = (data + size);
+
+    u64 x_start  = (7 * x) / 16;
+    u64 x_end    = (8 * x) / 16;
+    u64 y_start  = (7 * y) / 16;
+    u64 y_end    = (8 * y) / 16;
+
+    // Need to check but it s normally legal to do so 
+    real (*restrict u_span)[uv.y_size] 
+        = make_2D_span(real, restrict, uv.u, uv.y_size);
+
+    real (*restrict v_span)[uv.y_size] 
+        = make_2D_span(real, restrict, uv.v, uv.y_size);
+
+    for(u64 simd_i = SIMD_OFFSET_X; simd_i < simd_x_size - SIMD_OFFSET_X; simd_i++)
+    {
+        for(u64 simd_j = SIMD_LEN; simd_j < simd_y_size - SIMD_LEN; simd_j += SIMD_LEN)
+        {   
+            for(u64 k = 0; k < SIMD_LEN; k++)
+            {   
+                u64 scalar_row = simd_i - 1 + k * num_center_rows;
+                u64 scalar_col = (simd_j/ SIMD_LEN) -1;
+
+                real pattern = (real)(scalar_row >= x_start && scalar_row < x_end 
+                                   && scalar_col >= y_start && scalar_col < y_end);
+                
+                u_span[simd_i][simd_j+k] = REAL_TYPE(1.0) - pattern;
+                v_span[simd_i][simd_j+k] = pattern;
+            }
+        }
+    }
+
+    update_top_bottom(&uv);
+    return uv;
+}
+
+chemicals_t zeros_chemicals(u64 x, u64 y)
+{
+    assert(x % SIMD_LEN == 0);
+    assert(y % SIMD_LEN == 0);
+
+    chemicals_t uv;
+    uv.nb_members = 2;
+
+    uv.x_size = (x/SIMD_LEN) + 2 ;
+    uv.y_size = (y + 2) * SIMD_LEN;
+
+    u64 size = (uv.x_size * uv.y_size);
+    u64 bytes_size = uv.nb_members * (size * sizeof(real));
+    
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size);
+    if(!data)
+    {
+        gs_error_print("Could not allocate %lld bytes for the mesh", bytes_size);
+    }
+    memset(data, 0, bytes_size); 
+
+    uv.u = (data);
+    uv.v = (data + size);
+    
+    return uv;
+}
+
+chemicals_t to_scalar_layout(chemicals_t const *chem_in) 
+{
+    chemicals_t uv;
+    uv.nb_members = chem_in->nb_members;
+   
+    u64 num_center_rows = chem_in->x_size - 2;
+    u64 scalar_x_size   = num_center_rows * SIMD_LEN; 
+    u64 scalar_y_size   = (chem_in->y_size / SIMD_LEN) - 2; 
+
+    uv.x_size = scalar_x_size;            
+    uv.y_size = scalar_y_size;
+
+    u64 size = (uv.x_size * uv.y_size);
+    u64 bytes_size = uv.nb_members * (size * sizeof(real));
+
+    // We might want to have a scalar_alignment
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size);
+    if(!data)
+    {
+        gs_error_print("Could not allocate %lld bytes for the mesh", bytes_size);
+    }
+
+    //Legal with restrict as per 
+    // https://en.cppreference.com/w/c/language/restrict
+    uv.u = (data);
+    uv.v = (data + size);
+
+    // Need to check but it s normally legal to do so 
+    real (*restrict u_out)[uv.y_size] 
+        = make_2D_span(real, restrict, uv.u, uv.y_size);
+
+    real (*restrict v_out)[uv.y_size] 
+        = make_2D_span(real, restrict, uv.v, uv.y_size);
+
+    const real (*restrict u_in)[chem_in->y_size] 
+        = make_2D_span(real, restrict, chem_in->u, chem_in->y_size);
+
+    const real (*restrict v_in)[chem_in->y_size] 
+        = make_2D_span(real, restrict, chem_in->v, chem_in->y_size);
+
+    for(u64 simd_i = SIMD_OFFSET_X; simd_i < chem_in->x_size - SIMD_OFFSET_X; simd_i++)
+    {
+        for(u64 simd_j = SIMD_LEN; simd_j < chem_in->y_size - SIMD_LEN; simd_j+=SIMD_LEN)
+        {   
+            for(u64 k = 0; k < SIMD_LEN; k++)
+            {   
+                u64 scalar_row = simd_i - 1 + k * num_center_rows;
+                u64 scalar_col = (simd_j/SIMD_LEN)-1;
+
+                u_out[scalar_row][scalar_col] = u_in[simd_i][simd_j+k];
+                v_out[scalar_row][scalar_col] = v_in[simd_i][simd_j+k]; 
+            }
+        }
+    }
+    return uv;
+}
+
+#else
+
+static const u64 ALIGNMENT = sizeof(real) * 8;
+
+chemicals_t new_chemicals(u64 x, u64 y) 
+{
+    chemicals_t uv;
+
+    uv.x_size = x + (2 * PADDING_OFFSET_X);
+    uv.y_size = y + (2 * PADDING_OFFSET_Y);
+
+    uv.nb_members = 2;
+
+    u64 size = (uv.x_size * uv.y_size);
+    u64 bytes_size = uv.nb_members * (size * sizeof(real));
+
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size);
+    if(!data)
+    {
+        gs_error_print("Could not allocate %lld bytes for the mesh", bytes_size);
+    }
+    memset(data, 0, bytes_size);
+
+    //Legal with restrict as per 
+    // https://en.cppreference.com/w/c/language/restrict
+    uv.u = (data);
+    uv.v = (data + size);
+
+    // Potentially missing a -4 on the x bound
+    u64 x_start  = (7 * uv.x_size) / 16;
+    u64 x_end    = (8 * uv.x_size) / 16;
+    u64 y_start  = (7 * uv.y_size) / 16;
+    u64 y_end    = (8 * uv.y_size) / 16;
+
+    for(u64 i = PADDING_OFFSET_X; i < uv.x_size - PADDING_OFFSET_X; i++)
+    {
+        for(u64 j = PADDING_OFFSET_Y; j < uv.y_size - PADDING_OFFSET_Y; j++)
+        {
+            u64 idx = i * uv.y_size + j;
+            int in_region = (i >= x_start && i < x_end && 
+                             j >= y_start && j < y_end);
+
+            real pattern = (real)in_region;
+            
+            uv.u[idx] = REAL_TYPE(1.0) - pattern;
+            uv.v[idx] = pattern;
+        }
+    }
+    return uv;
+}
+
+chemicals_t zeros_chemicals(u64 x, u64 y)
+{
+    chemicals_t uv;
+    uv.x_size = x + (2 * PADDING_OFFSET_X);
+    uv.y_size = y + (2 * PADDING_OFFSET_Y);
+
+    uv.nb_members = 2;
+
+    u64 size = (uv.x_size * uv.y_size);
+    u64 bytes_size = uv.nb_members * (size * sizeof(real));
+
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size);
+    if(!data)
+    {
+        gs_error_print("Could not allocate %lld bytes for the mesh", bytes_size);
+    }
+    memset(data, 0, bytes_size); 
+
+    uv.u = (data);
+    uv.v = (data + size);
+
+    return uv;
+}
+
+#endif
+
+#ifdef SIMD_LAYOUT
+
+void simulation_step(chemicals_t const* chem_in, chemicals_t* chem_out)
+{
+    assert(chem_in->u && chem_out->u);
+    assert(chem_in->v && chem_out->v);
+    assert(chem_in->x_size == chem_out->x_size);
+    assert(chem_in->y_size == chem_out->y_size);
+
+    real u      = REAL_TYPE(0.0); 
+    real v      = REAL_TYPE(0.0);
+    real du     = REAL_TYPE(0.0);
+    real dv     = REAL_TYPE(0.0);
+    real full_u = REAL_TYPE(0.0);
+    real full_v = REAL_TYPE(0.0);
+    real sq_uv  = REAL_TYPE(0.0);
+    
+    const real (*restrict u_span)[chem_in->y_size] =
+        __builtin_assume_aligned(make_2D_span(real, restrict, chem_in->u, chem_in->y_size), 64);
+
+    const real (*restrict v_span)[chem_in->y_size] =
+        __builtin_assume_aligned(make_2D_span(real, restrict, chem_in->v, chem_in->y_size), 64);
+
+    real (*restrict u_span_out)[chem_out->y_size] =
+        __builtin_assume_aligned(make_2D_span(real, restrict, chem_out->u, chem_out->y_size), 64);
+
+    real (*restrict v_span_out)[chem_out->y_size] =
+        __builtin_assume_aligned(make_2D_span(real, restrict, chem_out->v, chem_out->y_size), 64);
+    
+    for(u64 i = SIMD_OFFSET_X; i < chem_in->x_size - SIMD_OFFSET_X; i++)
+    {
+        for(u64 j = SIMD_LEN; j < chem_in->y_size - SIMD_LEN; j+=SIMD_LEN)
+        {
+            for(u64 simd_lane = 0; simd_lane < SIMD_LEN; simd_lane++)
+            {
+                u64 k = j + simd_lane;
+                u = u_span[i][k];
+                v = v_span[i][k];
+                sq_uv = u * v * v;
+
+                // This is the stencil operation
+                real full_u1 = STENCIL_WEIGHTS[0][0] * (u_span[i-1][k-SIMD_LEN] - u);
+                real full_v1 = STENCIL_WEIGHTS[0][0] * (v_span[i-1][k-SIMD_LEN] - v); 
+                real full_u2 = STENCIL_WEIGHTS[0][1] * (u_span[i-1][k  ] - u);
+                real full_v2 = STENCIL_WEIGHTS[0][1] * (v_span[i-1][k  ] - v);
+                real full_u3 = STENCIL_WEIGHTS[0][2] * (u_span[i-1][k+SIMD_LEN] - u);
+                real full_v3 = STENCIL_WEIGHTS[0][2] * (v_span[i-1][k+SIMD_LEN] - v); 
+                real full_u4 = STENCIL_WEIGHTS[1][0] * (u_span[i  ][k-SIMD_LEN] - u);
+                real full_v4 = STENCIL_WEIGHTS[1][0] * (v_span[i  ][k-SIMD_LEN] - v);
+                assert(STENCIL_WEIGHTS[1][1] == 0.0);
+                full_u1 += STENCIL_WEIGHTS[1][2] * (u_span[i  ][k+SIMD_LEN] - u);
+                full_v1 += STENCIL_WEIGHTS[1][2] * (v_span[i  ][k+SIMD_LEN] - v);
+                full_u2 += STENCIL_WEIGHTS[2][0] * (u_span[i+1][k-SIMD_LEN] - u);
+                full_v2 += STENCIL_WEIGHTS[2][0] * (v_span[i+1][k-SIMD_LEN] - v);
+                full_u3 += STENCIL_WEIGHTS[2][1] * (u_span[i+1][k  ] - u);
+                full_v3 += STENCIL_WEIGHTS[2][1] * (v_span[i+1][k  ] - v);
+                full_u4 += STENCIL_WEIGHTS[2][2] * (u_span[i+1][k+SIMD_LEN] - u);
+                full_v4 += STENCIL_WEIGHTS[2][2] * (v_span[i+1][k+SIMD_LEN] - v);
+
+                full_u = (full_u1 + full_u2) + (full_u3 + full_u4);
+                full_v = (full_v1 + full_v2) + (full_v3 + full_v4);
+
+                du = DIFFUSION_RATE_U * full_u - sq_uv + FEEDRATE * (REAL_TYPE(1.0) - u);
+                dv = DIFFUSION_RATE_V * full_v + sq_uv - (FEEDRATE + KILLRATE) * v;
+                
+                u_span_out[i][k] = u + du * DELTA_T;
+                v_span_out[i][k] = v + dv * DELTA_T;
+            }
+        }
+    }
+    update_top_bottom(chem_out);
+}
+
+#elif defined CACHE_BLOCKED && !defined(SIMD_LAYOUT)
+
+// Compute block size at comp time
+// add two loops 
+
+void simulation_step(const chemicals_t chem_in, chemicals_t chem_out)
+{
+    assert(chem_in.u && chem_out.u);
+    assert(chem_in.v && chem_out.v);
+    assert(chem_in.x_size == chem_out.x_size);
+    assert(chem_in.y_size == chem_out.y_size);
+
+    real u      = REAL_TYPE(0.0); 
+    real v      = REAL_TYPE(0.0);
+    real du     = REAL_TYPE(0.0);
+    real dv     = REAL_TYPE(0.0);
+    real full_u = REAL_TYPE(0.0);
+    real full_v = REAL_TYPE(0.0);
+    real sq_uv  = REAL_TYPE(0.0);
+    
+    const real (*restrict u_span)[chem_in.y_size] =
+        make_2D_span(real, restrict, chem_in.u, chem_in.y_size);
+
+    const real (*restrict v_span)[chem_in.y_size] =
+        make_2D_span(real, restrict, chem_in.v, chem_in.y_size);
+
+    real (*restrict u_span_out)[chem_out.y_size] =
+        make_2D_span(real, restrict, chem_out.u, chem_out.y_size);
+
+    real (*restrict v_span_out)[chem_out.y_size] =
+        make_2D_span(real, restrict, chem_out.v, chem_out.y_size);
+    
+    for(u64 i = PADDING_OFFSET_X; i < chem_in.x_size - PADDING_OFFSET_X; i++)
+    {
+        for(u64 j = PADDING_OFFSET_Y; j < chem_in.y_size - PADDING_OFFSET_Y; j++)
+        {
+            u = u_span[i][j];
+            v = v_span[i][j];
+            sq_uv = u * v * v;
+            
+            // This is the stencil operation
+            real full_u1 = STENCIL_WEIGHTS[0][0] * (u_span[i-1][j-1] - u);
+            real full_v1 = STENCIL_WEIGHTS[0][0] * (v_span[i-1][j-1] - v); 
+            real full_u2 = STENCIL_WEIGHTS[0][1] * (u_span[i-1][j  ] - u);
+            real full_v2 = STENCIL_WEIGHTS[0][1] * (v_span[i-1][j  ] - v);
+            real full_u3 = STENCIL_WEIGHTS[0][2] * (u_span[i-1][j+1] - u);
+            real full_v3 = STENCIL_WEIGHTS[0][2] * (v_span[i-1][j+1] - v); 
+            real full_u4 = STENCIL_WEIGHTS[1][0] * (u_span[i  ][j-1] - u);
+            real full_v4 = STENCIL_WEIGHTS[1][0] * (v_span[i  ][j-1] - v);
+            assert(STENCIL_WEIGHTS[1][1] == 0.0);
+            full_u1 += STENCIL_WEIGHTS[1][2] * (u_span[i  ][j+1] - u);
+            full_v1 += STENCIL_WEIGHTS[1][2] * (v_span[i  ][j+1] - v);
+            full_u2 += STENCIL_WEIGHTS[2][0] * (u_span[i+1][j-1] - u);
+            full_v2 += STENCIL_WEIGHTS[2][0] * (v_span[i+1][j-1] - v);
+            full_u3 += STENCIL_WEIGHTS[2][1] * (u_span[i+1][j  ] - u);
+            full_v3 += STENCIL_WEIGHTS[2][1] * (v_span[i+1][j  ] - v);
+            full_u4 += STENCIL_WEIGHTS[2][2] * (u_span[i+1][j+1] - u);
+            full_v4 += STENCIL_WEIGHTS[2][2] * (v_span[i+1][j+1] - v);
+
+            full_u = (full_u1 + full_u2) + (full_u3 + full_u4);
+            full_v = (full_v1 + full_v2) + (full_v3 + full_v4);
+
+            du = DIFFUSION_RATE_U * full_u - sq_uv + FEEDRATE * (REAL_TYPE(1.0) - u);
+            dv = DIFFUSION_RATE_V * full_v + sq_uv - (FEEDRATE + KILLRATE) * v;
+            
+            u_span_out[i][j] = u + du * DELTA_T;
+            v_span_out[i][j] = v + dv * DELTA_T;
+        }
+    }
+}
+
+#elifdef UNROLL 
+
+void simulation_step(const chemicals_t chem_in, chemicals_t chem_out)
+{
+    assert(chem_in.u && chem_out.u);
+    assert(chem_in.v && chem_out.v);
+    assert(chem_in.x_size == chem_out.x_size);
+    assert(chem_in.y_size == chem_out.y_size);
+
+    real u      = REAL_TYPE(0.0); 
+    real v      = REAL_TYPE(0.0);
+    real du     = REAL_TYPE(0.0);
+    real dv     = REAL_TYPE(0.0);
+    real full_u = REAL_TYPE(0.0);
+    real full_v = REAL_TYPE(0.0);
+    real sq_uv  = REAL_TYPE(0.0);
+    
+    const real (*restrict u_span)[chem_in.y_size] =
+        make_2D_span(real, restrict, chem_in.u, chem_in.y_size);
+
+    const real (*restrict v_span)[chem_in.y_size] =
+        make_2D_span(real, restrict, chem_in.v, chem_in.y_size);
+
+    real (*restrict u_span_out)[chem_out.y_size] =
+        make_2D_span(real, restrict, chem_out.u, chem_out.y_size);
+
+    real (*restrict v_span_out)[chem_out.y_size] =
+        make_2D_span(real, restrict, chem_out.v, chem_out.y_size);
+
+    for(u64 i = PADDING_OFFSET_X; i < chem_in.x_size - PADDING_OFFSET_X; i++)
+    {
+        for(u64 j = PADDING_OFFSET_Y; j < chem_in.y_size - PADDING_OFFSET_Y; j++)
+        {
+            u = u_span[i][j];
+            v = v_span[i][j];
+            sq_uv = u * v * v;
+            
+            // This is the stencil operation
+            real full_u1 = STENCIL_WEIGHTS[0][0] * (u_span[i-1][j-1] - u);
+            real full_v1 = STENCIL_WEIGHTS[0][0] * (v_span[i-1][j-1] - v); 
+            real full_u2 = STENCIL_WEIGHTS[0][1] * (u_span[i-1][j  ] - u);
+            real full_v2 = STENCIL_WEIGHTS[0][1] * (v_span[i-1][j  ] - v);
+            real full_u3 = STENCIL_WEIGHTS[0][2] * (u_span[i-1][j+1] - u);
+            real full_v3 = STENCIL_WEIGHTS[0][2] * (v_span[i-1][j+1] - v); 
+            real full_u4 = STENCIL_WEIGHTS[1][0] * (u_span[i  ][j-1] - u);
+            real full_v4 = STENCIL_WEIGHTS[1][0] * (v_span[i  ][j-1] - v);
+            assert(STENCIL_WEIGHTS[1][1] == 0.0);
+            full_u1 += STENCIL_WEIGHTS[1][2] * (u_span[i  ][j+1] - u);
+            full_v1 += STENCIL_WEIGHTS[1][2] * (v_span[i  ][j+1] - v);
+            full_u2 += STENCIL_WEIGHTS[2][0] * (u_span[i+1][j-1] - u);
+            full_v2 += STENCIL_WEIGHTS[2][0] * (v_span[i+1][j-1] - v);
+            full_u3 += STENCIL_WEIGHTS[2][1] * (u_span[i+1][j  ] - u);
+            full_v3 += STENCIL_WEIGHTS[2][1] * (v_span[i+1][j  ] - v);
+            full_u4 += STENCIL_WEIGHTS[2][2] * (u_span[i+1][j+1] - u);
+            full_v4 += STENCIL_WEIGHTS[2][2] * (v_span[i+1][j+1] - v);
+
+            full_u = (full_u1 + full_u2) + (full_u3 + full_u4);
+            full_v = (full_v1 + full_v2) + (full_v3 + full_v4);
+
+            du = DIFFUSION_RATE_U * full_u - sq_uv + FEEDRATE * (REAL_TYPE(1.0) - u);
+            dv = DIFFUSION_RATE_V * full_v + sq_uv - (FEEDRATE + KILLRATE) * v;
+            
+            u_span_out[i][j] = u + du * DELTA_T;
+            v_span_out[i][j] = v + dv * DELTA_T;
+
+        }
+    }
+}
+
+#else
+
+void simulation_step(const chemicals_t chem_in, chemicals_t chem_out)
+{
+    assert(chem_in.u && chem_out.u);
+    assert(chem_in.v && chem_out.v);
+    assert(chem_in.x_size == chem_out.x_size);
+    assert(chem_in.y_size == chem_out.y_size);
+
+    real u                  = REAL_TYPE(0.0); 
+    real v                  = REAL_TYPE(0.0);
+    real du                 = REAL_TYPE(0.0);
+    real dv                 = REAL_TYPE(0.0);
+    real full_u             = REAL_TYPE(0.0);
+    real full_v             = REAL_TYPE(0.0);
+    real sq_uv              = REAL_TYPE(0.0); 
+    real weight             = REAL_TYPE(0.0);
+
+    u64 idx                 = 0;
+    u64 stencil_start       = 0;
+    u64 inner_idx           = 0;
+
+    for(u64 i = PADDING_OFFSET_X; i < chem_in.x_size - PADDING_OFFSET_X; i++)
+    {
+        for(u64 j = PADDING_OFFSET_Y; j < chem_in.y_size - PADDING_OFFSET_Y; j++)
+        {
+            idx = i * chem_in.y_size + j;
+
+            u = chem_in.u[idx];
+            v = chem_in.v[idx];
+            
+            sq_uv = u * v * v;
+            
+            full_u = REAL_TYPE(0.0);
+            full_v = REAL_TYPE(0.0);
+
+            for(u64 k = 0; k < STENCIL_ORDER; k++)
+            {
+                stencil_start = (i + k - STENCIL_OFFSET) * chem_in.y_size - STENCIL_OFFSET;
+
+                for(u64 l = 0; l < STENCIL_ORDER; l++)
+                {
+                    
+                    inner_idx = stencil_start + j + l;
+                    weight = STENCIL_WEIGHTS[k][l];
+                    full_u += weight * (chem_in.u[inner_idx] - u);
+                    full_v += weight * (chem_in.v[inner_idx] - v);
+                }
+
+            }
+            
+            du = DIFFUSION_RATE_U * full_u - sq_uv + FEEDRATE * (REAL_TYPE(1.0) - u);
+            dv = DIFFUSION_RATE_V * full_v + sq_uv - (FEEDRATE + KILLRATE) * v;
+            
+            chem_out.u[idx] = u + du * DELTA_T;
+            chem_out.v[idx] = v + dv * DELTA_T;
+        }
+    }
+}
+
+#endif
+
+void swap_chemicals(chemicals_t *chem_1, chemicals_t *chem_2)
+{
+    assert(chem_1 && chem_2);
+
+    chemicals_t tmp = *chem_1;
+    *chem_1 = *chem_2;
+    *chem_2 = tmp;
+}
+
+void free_chemicals(chemicals_t *chemical)
+{
+    if(chemical->u ) free(chemical->u);
+}
+
+// Il va me falloir un truc pour gérer le layout tuilé ici aussi
+void write_data(FILE *fp, chemicals_t const *chem)
+{
+    fwrite(&chem->x_size    , sizeof(chem->x_size)      , 1, fp);
+    fwrite(&chem->y_size    , sizeof(chem->y_size)      , 1, fp);
+    fwrite(&chem->nb_members, sizeof(chem->nb_members)  , 1, fp);
+
+    // Works as u is ptr to the begening of a long serie of aligned data
+    fwrite(chem->u, sizeof(*chem->u), chem->nb_members * chem->x_size * chem->y_size, fp);
+}
+
+chemicals_t read_data(FILE *fp)
+{
+    chemicals_t out;
+
+    fread(&out.x_size, sizeof(out.x_size)           , 1, fp);
+    fread(&out.y_size, sizeof(out.y_size)           , 1, fp);
+    fread(&out.nb_members, sizeof(out.nb_members)   , 1, fp); 
+  
+    u64 size = out.x_size * out.y_size;
+    u64 bytes_size = out.nb_members * size;
+    
+    real *data = (real *)aligned_alloc(ALIGNMENT, bytes_size); 
+    fread(data, sizeof(*data), bytes_size, fp);
+
+    out.u = (data);
+    out.v = (data + size);
+
+    return out;
+}
