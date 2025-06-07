@@ -16,6 +16,7 @@
 #define SIMD_OFFSET_Y   1ULL
 
 #define ALIGNMENT       64ULL
+// Shall be computed
 #define BLOCK_SIZE_X    64ULL
 #define BLOCK_SIZE_Y    64ULL
                 
@@ -33,7 +34,7 @@ static inline void update_top_bottom(chemicals_t *uv)
     real (*restrict v_span)[uv->y_size][SIMD_WIDTH] 
         = aligned_3D_span(uv, v, y_size);
    
-    #pragma omp parallel for schedule(dynamic)
+    #pragma omp parallel for 
     for(u64 j = SIMD_OFFSET_Y; j < uv->y_size - SIMD_OFFSET_Y; j++)
     {
         for(u64 k = 0; k < SIMD_WIDTH-1; k++)
@@ -82,8 +83,8 @@ chemicals_t new_chemicals(u64 x, u64 y)
     uv.u = (data);
     uv.v = (data + size);
 
-    u64 x_start  = (7 * x) / 16;
-    u64 x_end    = (8 * x) / 16;
+    u64 x_start  = ((7 * x) / 16) - 4;
+    u64 x_end    = ((8 * x) / 16) - 4;
     u64 y_start  = (7 * y) / 16;
     u64 y_end    = (8 * y) / 16;
 
@@ -94,7 +95,8 @@ chemicals_t new_chemicals(u64 x, u64 y)
     real (*restrict v_span)[uv.y_size][SIMD_WIDTH] 
         = aligned_3D_span(&uv, v, y_size);
 
-    //#pragma omp parallel for 
+    #pragma omp parallel for simd aligned(u_span, v_span) simdlen(SIMD_WIDTH) \
+    schedule(static, BLOCK_SIZE_X) 
     for(u64 simd_i = SIMD_OFFSET_X; simd_i < simd_x_size - SIMD_OFFSET_X; simd_i++)
     {
         for(u64 simd_j = SIMD_OFFSET_Y; simd_j < simd_y_size - SIMD_OFFSET_Y; simd_j++)
@@ -183,7 +185,7 @@ chemicals_t to_scalar_layout(chemicals_t const *chem_in)
     const real (*restrict v_in)[chem_in->y_size][SIMD_WIDTH]
         = aligned_3D_span(chem_in, v, y_size);
 
-    //#pragma omp parallel for
+    //#pragma omp parallel for schedule(static, BLOCK_SIZE_X)
     for(u64 simd_i = SIMD_OFFSET_X; simd_i < chem_in->x_size - SIMD_OFFSET_X; simd_i++)
     {
         for(u64 simd_j = SIMD_OFFSET_Y; simd_j < chem_in->y_size - SIMD_OFFSET_Y; simd_j++)
@@ -201,12 +203,14 @@ chemicals_t to_scalar_layout(chemicals_t const *chem_in)
     return uv;
 }
                 
-// This is the stencil operation 
 #define STENCIL_OPERATION()                                                     \
 do {                                                                            \
         const real u = u_span[i][j][k];                                         \
         const real v = v_span[i][j][k];                                         \
         const real sq_uv = u * v * v;                                           \
+                                                                                \
+        real du = FEEDRATE * (REAL_TYPE(1.0) - u);                              \
+        real dv = REAL_TYPE(-1.0) * ((FEEDRATE + KILLRATE) * v);                \
                                                                                 \
         real full_u1 = STENCIL_WEIGHTS[0][0] * (u_span[i-1][j-1][k] - u);       \
         real full_v1 = STENCIL_WEIGHTS[0][0] * (v_span[i-1][j-1][k] - v);       \
@@ -229,13 +233,11 @@ do {                                                                            
         const real full_u = (full_u1 + full_u2) + (full_u3 + full_u4);          \
         const real full_v = (full_v1 + full_v2) + (full_v3 + full_v4);          \
                                                                                 \
-        const real du = (DIFFUSION_RATE_U * full_u - sq_uv)                     \
-                        + (FEEDRATE * (REAL_TYPE(1.0) - u));                    \
-        const real dv = (DIFFUSION_RATE_V * full_v + sq_uv)                     \
-                        - ((FEEDRATE + KILLRATE) * v);                          \
+        du += ((DIFFUSION_RATE_U * full_u) - sq_uv);                            \
+        dv += ((DIFFUSION_RATE_V * full_v) + sq_uv);                            \
                                                                                 \
-        u_span_out[i][j][k] = u + du * DELTA_T;                                 \
-        v_span_out[i][j][k] = v + dv * DELTA_T;                                 \
+        u_span_out[i][j][k] = u + (du * DELTA_T);                               \
+        v_span_out[i][j][k] = v + (dv * DELTA_T);                               \
 } while(0)
 
 void simulation_step(chemicals_t const* chem_in, chemicals_t* chem_out)
@@ -265,7 +267,7 @@ void simulation_step(chemicals_t const* chem_in, chemicals_t* chem_out)
     
     #pragma omp parallel
     {
-        #pragma omp for nowait schedule(dynamic)
+        #pragma omp for nowait 
         for(u64 bi = 0; bi < nb_x; ++bi)
         {
             const u64 i0 = SIMD_OFFSET_X + bi * BLOCK_SIZE_X;
@@ -275,6 +277,8 @@ void simulation_step(chemicals_t const* chem_in, chemicals_t* chem_out)
             {
                 for(u64 j = SIMD_OFFSET_Y; j < last_j; ++j)
                 {
+                    #pragma omp simd aligned \
+                    (u_span, v_span, u_span_out, v_span_out) simdlen(SIMD_WIDTH)
                     for(u64 k = 0; k < SIMD_WIDTH; ++k)
                     {
                         STENCIL_OPERATION();
@@ -282,12 +286,15 @@ void simulation_step(chemicals_t const* chem_in, chemicals_t* chem_out)
                 }
             }
         }
-        
-        #pragma omp for nowait schedule(dynamic)
+       
+        // Tail loop 
+        #pragma omp for nowait 
         for(u64 i = last_bi; i < last_i; ++i)
         {
             for(u64 j = SIMD_OFFSET_Y; j < last_j; ++j)
             {
+                #pragma omp simd aligned \
+                (u_span, v_span, u_span_out, v_span_out) simdlen(SIMD_WIDTH)
                 for(u64 k = 0; k < SIMD_WIDTH; ++k)
                 {
                     STENCIL_OPERATION();

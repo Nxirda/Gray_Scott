@@ -60,29 +60,17 @@ int main(int argc, char **argv)
         uv_in   = new_chemicals(args.num_rows, args.num_cols);
         uv_out  = zeros_chemicals(args.num_rows, args.num_cols);
        
-        /*tmp_print_simd(&uv_in);
-        printf("\n");
-        chemicals_t tmp = to_scalar_layout(&uv_in);
-        tmp_print(&tmp);*/
-        
         gs_debug_print("Num rows : %lld; num cols : %lld", args.num_rows, args.num_cols);
         gs_debug_print("X size : %lld; Y size : %lld", uv_in.x_size, uv_in.y_size);
         
-        //tmp_print(&uv_in);
         for(u64 i = 0; i < args.steps; i++)
         {
             simulation_step(&uv_in, &uv_out);
             swap_chemicals(&uv_in, &uv_out);
 
-            //if(i % args.output_frequency == 0)
-            //    write_data(fp, &uv_in);
+            if(i % args.output_frequency == 0)
+                write_data(fp, &uv_in);
         }
-        
-        
-        //tmp_print(&uv_in);
-        //chemicals_t tmp = to_scalar_layout(&uv_in);
-        //write_data(fp, &tmp);
-        //tmp_print(&tmp);
 
         fclose(fp);
     }
