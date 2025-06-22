@@ -2,6 +2,8 @@ CC=gcc
 
 TARGET=gray_scott
 
+SDL2=`sdl2-config --cflags --libs`
+
 CFlags=-std=c2x
 
 ifdef DEBUG
@@ -19,7 +21,6 @@ endif
 WFlags= -Werror -Wall -Wextra -Wconversion -Wpedantic -Iinclude/ 
 OFlags= -Ofast -march=native -funroll-loops -flto 
 
-SDL2=`sdl2-config --cflags --libs`
 LFlags= $(SDL2) -fopenmp 
 
 SRC_DIR=src

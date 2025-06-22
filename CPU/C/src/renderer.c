@@ -99,9 +99,9 @@ void render_gray_scott(SDL_config_t config, chemicals_t const* chemical)
             // Force the Clamping of the value between 0 and 1 
             // and mul it by 2 to use the full palette
             if(v_map[i][j] < REAL_TYPE(0.0))
-                value = REAL_TYPE(0.0);
+                value = 0;
             else if(v_map[i][j] > REAL_TYPE(1.0))
-                value = REAL_TYPE(1.0);
+                value = 1;
             else
                 value = (u32)(v_map[i][j] * REAL_TYPE(2.0) * REAL_TYPE(255.0));
 

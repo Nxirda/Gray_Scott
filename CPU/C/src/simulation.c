@@ -12,9 +12,12 @@
 // Replace 256 by computed SIMD_VECTOR_LEN of the arch
 #define SIMD_LEN        (256ULL/8ULL)
 #define SIMD_WIDTH      (SIMD_LEN/sizeof(real))//4
+
+// These shall be static const
 #define SIMD_OFFSET_X   1ULL
 #define SIMD_OFFSET_Y   1ULL
 
+/// This shall be deducted from simd size
 #define ALIGNMENT       64ULL
 // Shall be computed
 #define BLOCK_SIZE_X    64ULL

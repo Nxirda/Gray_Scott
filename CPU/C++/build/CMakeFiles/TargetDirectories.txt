@@ -1,0 +1,3 @@
+/home/Nxirda/Desktop/Projects/Gray_Scott/CPU/C++/build/CMakeFiles/simulation.dir
+/home/Nxirda/Desktop/Projects/Gray_Scott/CPU/C++/build/CMakeFiles/edit_cache.dir
+/home/Nxirda/Desktop/Projects/Gray_Scott/CPU/C++/build/CMakeFiles/rebuild_cache.dir
